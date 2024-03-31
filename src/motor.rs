@@ -3,6 +3,7 @@ use esp_idf_hal::gpio::{InputPin, OutputPin, PinDriver};
 use esp_idf_hal::ledc::config::TimerConfig;
 use esp_idf_hal::ledc::{LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver};
 use esp_idf_hal::peripheral::Peripheral;
+use esp_idf_hal::prelude::FromValueType;
 use esp_idf_hal::sys::EspError;
 
 use crate::hybrid_motor::HybridMotor;
@@ -44,7 +45,7 @@ impl MotorFactory {
             EEP: OutputPin,
             FAULT: InputPin,
     {
-        let config = TimerConfig::default();
+        let config = TimerConfig::default().frequency(50.kHz().into());
         let timer = LedcTimerDriver::new(timer, &config)?;
 
         let int1_driver = PinDriver::output(int1)?;
