@@ -1,5 +1,5 @@
 [package]
-name = "drv8833-driver"
+name = "esp32-mecanum-wheels"
 version = "0.1.0"
 authors = ["Rafael Milewski <rafael.milewski@gmail.com>"]
 edition = "2021"
@@ -17,6 +17,8 @@ opt-level = "z"
 esp-idf-svc = { version = "0.48.1" }
 esp-idf-hal = "0.43.1"
 esp32-nimble = "0.6.0"
+drv8833-driver = { path = "./drv8833-driver" }
+embedded-hal = "1.0.0"
 
 [build-dependencies]
 embuild = "0.31.4"

@@ -352,10 +352,7 @@ dependencies = [
 name = "drv8833-driver"
 version = "0.1.0"
 dependencies = [
- "embuild",
- "esp-idf-hal",
- "esp-idf-svc",
- "esp32-nimble",
+ "embedded-hal 1.0.0",
 ]
 
 [[package]]
@@ -589,6 +586,18 @@ dependencies = [
  "serde",
  "strum 0.24.1",
  "which",
+]
+
+[[package]]
+name = "esp32-mecanum-wheels"
+version = "0.1.0"
+dependencies = [
+ "drv8833-driver",
+ "embedded-hal 1.0.0",
+ "embuild",
+ "esp-idf-hal",
+ "esp-idf-svc",
+ "esp32-nimble",
 ]
 
 [[package]]
