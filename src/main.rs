@@ -49,7 +49,7 @@ fn main() {
         in1, in2, in3, in4, pwm, None::<PinDriver<AnyInputPin, Input>>
     );
 
-
+    motor.is_fault();
     motor.forward(70).unwrap();
     // motor.sleep()?;
 
