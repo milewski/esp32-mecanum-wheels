@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 use drv8833_driver::driver::{DRV8833Driver, MotorDriver, MotorDriverPwm};
 use embedded_hal::digital::InputPin;
+use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::gpio::{AnyInputPin, Input, PinDriver};
 use esp_idf_hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_hal::ledc::config::TimerConfig;
@@ -44,13 +45,34 @@ fn main() {
     let pwm = LedcDriver::new(peripherals.ledc.channel0, &timer, peripherals.pins.gpio3).unwrap();
 
     // let pwm = Arc::new(Mutex::new(pwm));
-    //
-    let mut motor = DRV8833Driver::new_pwm_sync(
-        in1, in2, in3, in4, pwm, None::<PinDriver<AnyInputPin, Input>>
+
+    let mut motor = DRV8833Driver::new_pwm_parallel(
+        in1, in2, in3, in4, pwm, None::<PinDriver<AnyInputPin, Input>>,
     );
 
-    motor.is_fault();
-    motor.forward(70).unwrap();
-    // motor.sleep()?;
+    motor.set_min_duty(150);
 
+    let mut power = 0;
+
+    loop {
+        if power >= 100 {
+            power = 0;
+            FreeRtos::delay_ms(1000);
+            motor.coast().unwrap();
+            FreeRtos::delay_ms(1000);
+            motor.reverse(100).unwrap();
+            FreeRtos::delay_ms(1000);
+            motor.stop().unwrap();
+            FreeRtos::delay_ms(1000);
+        }
+
+        motor.forward(power).unwrap();
+
+        power += 1;
+
+        println!("{power}");
+        FreeRtos::delay_ms(100);
+    }
+
+    // motor.sleep()?;
 }
