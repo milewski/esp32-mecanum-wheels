@@ -2,7 +2,7 @@
 
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
-use drv8833_driver::driver::{Driver, DRV8833Driver, Movement};
+use drv8833_driver::driver::{Driver, DRV8833Driver, MotorDriver, Movement};
 use embedded_hal::digital::InputPin;
 use esp_idf_hal::delay::FreeRtos;
 use esp_idf_hal::gpio::{AnyInputPin, Gpio18, Gpio19, Gpio3, Gpio4, Gpio5, Input, Output, OutputPin, PinDriver};
@@ -88,7 +88,7 @@ fn main() {
     let timer = LedcTimerDriver::new(peripherals.ledc.timer3, &TimerConfig::default()).unwrap();
     let sleep = LedcDriver::new(peripherals.ledc.channel0, &timer, peripherals.pins.gpio3).unwrap();
 
-    let mut motor = DRV8833Driver::new_pwm_parallel(
+    let mut motor = MotorDriver::new_pwm_parallel(
         in1, in2, in3, in4, sleep, None::<PinDriver<AnyInputPin, Input>>,
     );
 
