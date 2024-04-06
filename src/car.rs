@@ -1,26 +1,13 @@
 use std::f64::consts::PI;
+use std::sync::{Arc, Mutex};
 
-use esp_idf_hal::gpio::{InputPin, OutputPin};
-use esp_idf_hal::sys::EspError;
+use drv8833_driver::{Breaks, MotorDriverError, Movement, PwmSplitSingleDriverType};
+use embedded_hal::digital::{InputPin, OutputPin};
+use embedded_hal::pwm::SetDutyCycle;
 
-use crate::hybrid_motor::HybridMotor;
-use crate::motor::{Engine, Vector, Wheel};
-
-pub struct Mecanum<'d, INA1, INA2, INA3, INA4, FaultA, INB1, INB2, INB3, INB4, FaultB>
-    where
-        INA1: OutputPin,
-        INA2: OutputPin,
-        INA3: OutputPin,
-        INA4: OutputPin,
-        FaultA: InputPin,
-        INB1: OutputPin,
-        INB2: OutputPin,
-        INB3: OutputPin,
-        INB4: OutputPin,
-        FaultB: InputPin,
-{
-    motor_a: HybridMotor<'d, INA1, INA2, INA3, INA4, FaultA>,
-    motor_b: HybridMotor<'d, INB1, INB2, INB3, INB4, FaultB>,
+pub struct Mecanum<MotorA, MotorB> {
+    motor_a: MotorA,
+    motor_b: MotorB,
 }
 
 #[derive(Debug)]
@@ -35,162 +22,198 @@ pub enum Direction {
     BottomRight,
 }
 
-impl<'d, INA1, INA2, INA3, INA4, FaultA, INB1, INB2, INB3, INB4, FaultB> Mecanum<'d, INA1, INA2, INA3, INA4, FaultA, INB1, INB2, INB3, INB4, FaultB>
+impl<IN1, IN2, IN3, IN4, PWM, FAULTA, IN1B, IN2B, IN3B, IN4B, PWMB, FAULTB> Mecanum<
+    PwmSplitSingleDriverType<IN1, IN2, IN3, IN4, PWM, FAULTA>,
+    PwmSplitSingleDriverType<IN1B, IN2B, IN3B, IN4B, PWMB, FAULTB>
+>
     where
-        INA1: OutputPin,
-        INA2: OutputPin,
-        INA3: OutputPin,
-        INA4: OutputPin,
-        FaultA: InputPin,
-        INB1: OutputPin,
-        INB2: OutputPin,
-        INB3: OutputPin,
-        INB4: OutputPin,
-        FaultB: InputPin,
+        IN1: OutputPin,
+        IN2: OutputPin,
+        IN3: OutputPin,
+        IN4: OutputPin,
+        IN1B: OutputPin,
+        IN2B: OutputPin,
+        IN3B: OutputPin,
+        IN4B: OutputPin,
+        PWM: SetDutyCycle,
+        PWMB: SetDutyCycle,
+        FAULTA: InputPin,
+        FAULTB: InputPin
 {
     pub fn new(
-        motor_a: HybridMotor<'d, INA1, INA2, INA3, INA4, FaultA>,
-        motor_b: HybridMotor<'d, INB1, INB2, INB3, INB4, FaultB>,
-    ) -> Self {
-        Self { motor_a, motor_b }
+        motor_a: PwmSplitSingleDriverType<IN1, IN2, IN3, IN4, PWM, FAULTA>,
+        motor_b: PwmSplitSingleDriverType<IN1B, IN2B, IN3B, IN4B, PWMB, FAULTB>,
+    ) -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self { motor_a, motor_b }))
     }
 
-    pub fn spin(&mut self, x: u8, y: u8) -> Result<(), EspError> {
+    fn set_duty_cycle(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.motor_a.set_duty_cycle(force)?;
+        self.motor_b.set_duty_cycle(force)?;
+
+        Ok(())
+    }
+
+    pub fn spin(&mut self, x: u8, y: u8) -> Result<(), MotorDriverError> {
         let (direction, force) = self.interpret_direction_and_force(x, y);
 
-        self.set_force(force)?;
-
-        match direction {
-            Direction::Left => self.spin_left(force)?,
-            Direction::Right => self.spin_right(force)?,
-            _ => {}
+        match force {
+            0 => self.stop()?,
+            _ => match direction {
+                Direction::Left => self.spin_left(force)?,
+                Direction::Right => self.spin_right(force)?,
+                _ => unreachable!()
+            }
         }
 
         Ok(())
     }
 
-    pub fn update(&mut self, x: u8, y: u8) -> Result<(), EspError> {
+    pub fn stop(&mut self) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(0)?;
+
+        self.motor_a.a.coast()?;
+        self.motor_b.b.coast()?;
+
+        Ok(())
+    }
+
+    pub fn update(&mut self, x: u8, y: u8) -> Result<(), MotorDriverError> {
         let (direction, force) = self.interpret_direction_and_force(x, y);
 
-        self.set_force(force)?;
-
-        match direction {
-            Direction::Up => self.up(force)?,
-            Direction::Down => self.down(force)?,
-            Direction::Left => self.left(force)?,
-            Direction::Right => self.right(force)?,
-            Direction::TopRight => self.top_right(force)?,
-            Direction::TopLeft => self.top_left(force)?,
-            Direction::BottomLeft => self.bottom_left(force)?,
-            Direction::BottomRight => self.bottom_right(force)?,
+        match force {
+            0 => self.stop()?,
+            _ => match direction {
+                Direction::Up => self.up(force)?,
+                Direction::Down => self.down(force)?,
+                Direction::Left => self.left(force)?,
+                Direction::Right => self.right(force)?,
+                Direction::TopRight => self.top_right(force)?,
+                Direction::TopLeft => self.top_left(force)?,
+                Direction::BottomLeft => self.bottom_left(force)?,
+                Direction::BottomRight => self.bottom_right(force)?,
+            }
         }
 
         Ok(())
     }
 
-    pub fn right(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Forward, force)?;
-        self.motor_a.wheel_b.update(&Vector::Backward, force)?;
+    pub fn right(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
 
-        self.motor_b.wheel_a.update(&Vector::Backward, force)?;
-        self.motor_b.wheel_b.update(&Vector::Forward, force)?;
+        self.motor_a.a.reverse()?;
+        self.motor_a.b.forward()?;
 
-        Ok(())
-    }
-
-    pub fn left(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Backward, force)?;
-        self.motor_a.wheel_b.update(&Vector::Forward, force)?;
-
-        self.motor_b.wheel_a.update(&Vector::Forward, force)?;
-        self.motor_b.wheel_b.update(&Vector::Backward, force)?;
+        self.motor_b.a.forward()?;
+        self.motor_b.b.reverse()?;
 
         Ok(())
     }
 
-    pub fn up(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Forward, force)?;
-        self.motor_a.wheel_b.update(&Vector::Forward, force)?;
+    pub fn left(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
 
-        self.motor_b.wheel_a.update(&Vector::Forward, force)?;
-        self.motor_b.wheel_b.update(&Vector::Forward, force)?;
+        self.motor_a.a.forward()?;
+        self.motor_a.b.reverse()?;
 
-        Ok(())
-    }
-
-    pub fn down(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Backward, force)?;
-        self.motor_a.wheel_b.update(&Vector::Backward, force)?;
-
-        self.motor_b.wheel_a.update(&Vector::Backward, force)?;
-        self.motor_b.wheel_b.update(&Vector::Backward, force)?;
+        self.motor_b.a.reverse()?;
+        self.motor_b.b.forward()?;
 
         Ok(())
     }
 
-    pub fn top_right(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Forward, force)?;
-        self.motor_a.wheel_b.update(&Vector::Forward, 0)?;
+    pub fn up(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
 
-        self.motor_b.wheel_a.update(&Vector::Forward, 0)?;
-        self.motor_b.wheel_b.update(&Vector::Forward, force)?;
+        self.motor_a.a.reverse()?;
+        self.motor_a.b.reverse()?;
 
-        Ok(())
-    }
-
-    pub fn top_left(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Forward, 0)?;
-        self.motor_a.wheel_b.update(&Vector::Forward, force)?;
-
-        self.motor_b.wheel_a.update(&Vector::Forward, force)?;
-        self.motor_b.wheel_b.update(&Vector::Forward, 0)?;
+        self.motor_b.a.reverse()?;
+        self.motor_b.b.reverse()?;
 
         Ok(())
     }
 
-    pub fn bottom_left(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Backward, force)?;
-        self.motor_a.wheel_b.update(&Vector::Backward, 0)?;
+    pub fn down(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
 
-        self.motor_b.wheel_a.update(&Vector::Backward, 0)?;
-        self.motor_b.wheel_b.update(&Vector::Backward, force)?;
+        self.motor_a.a.forward()?;
+        self.motor_a.b.forward()?;
 
-        Ok(())
-    }
-
-    pub fn bottom_right(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Backward, 0)?;
-        self.motor_a.wheel_b.update(&Vector::Backward, force)?;
-
-        self.motor_b.wheel_a.update(&Vector::Backward, force)?;
-        self.motor_b.wheel_b.update(&Vector::Backward, 0)?;
+        self.motor_b.a.forward()?;
+        self.motor_b.b.forward()?;
 
         Ok(())
     }
 
-    pub fn spin_right(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Forward, force)?;
-        self.motor_a.wheel_b.update(&Vector::Backward, force)?;
+    pub fn top_right(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
 
-        self.motor_b.wheel_a.update(&Vector::Forward, force)?;
-        self.motor_b.wheel_b.update(&Vector::Backward, force)?;
+        self.motor_a.a.reverse()?;
+        self.motor_a.b.coast()?;
 
-        Ok(())
-    }
-
-    pub fn spin_left(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.wheel_a.update(&Vector::Backward, force)?;
-        self.motor_a.wheel_b.update(&Vector::Forward, force)?;
-
-        self.motor_b.wheel_a.update(&Vector::Backward, force)?;
-        self.motor_b.wheel_b.update(&Vector::Forward, force)?;
+        self.motor_b.a.coast()?;
+        self.motor_b.b.reverse()?;
 
         Ok(())
     }
 
-    fn set_force(&mut self, force: u8) -> Result<(), EspError> {
-        self.motor_a.engine.set_force(force)?;
-        self.motor_b.engine.set_force(force)?;
+    pub fn top_left(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
+
+        self.motor_a.a.coast()?;
+        self.motor_a.b.reverse()?;
+
+        self.motor_b.a.reverse()?;
+        self.motor_b.b.coast()?;
+
+        Ok(())
+    }
+
+    pub fn bottom_left(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
+
+        self.motor_a.a.forward()?;
+        self.motor_a.b.coast()?;
+
+        self.motor_b.a.coast()?;
+        self.motor_b.b.forward()?;
+
+        Ok(())
+    }
+
+    pub fn bottom_right(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
+
+        self.motor_a.a.coast()?;
+        self.motor_a.b.forward()?;
+
+        self.motor_b.a.forward()?;
+        self.motor_b.b.coast()?;
+
+        Ok(())
+    }
+
+    pub fn spin_right(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
+
+        self.motor_a.a.reverse()?;
+        self.motor_a.b.forward()?;
+
+        self.motor_b.a.reverse()?;
+        self.motor_b.b.forward()?;
+
+        Ok(())
+    }
+
+    pub fn spin_left(&mut self, force: u8) -> Result<(), MotorDriverError> {
+        self.set_duty_cycle(force)?;
+
+        self.motor_a.a.forward()?;
+        self.motor_a.b.reverse()?;
+
+        self.motor_b.a.forward()?;
+        self.motor_b.b.reverse()?;
 
         Ok(())
     }
